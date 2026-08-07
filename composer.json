@@ -1,0 +1,45 @@
+{
+  "name": "ipiner/upload",
+  "description": "Pin 文件上传",
+  "keywords": ["framework", "laravel", "pin", "upload"],
+  "license": "MIT",
+  "require": {
+    "ipiner/pin": "^1.0",
+    "intervention/image": "^3.11"
+  },
+  "require-dev": {
+    "dedoc/scramble": "^0.13.22",
+    "laravel/pint": "^1.15",
+    "orchestra/testbench": "^11.1",
+    "pestphp/pest": "^4.7",
+    "phpstan/phpstan": "^2.2",
+    "phpunit/phpunit": "^12"
+  },
+  "autoload": {
+    "psr-4": {
+      "Pin\\Upload\\": "src"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "App\\": "tests/laravel/app",
+      "Pin\\Tests\\": "tests"
+    }
+  },
+  "config": {
+    "preferred-install": "dist",
+    "sort-packages": true,
+    "allow-plugins": {
+      "pestphp/pest-plugin": true
+    }
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "Pin\\Upload\\UploadServiceProvider"
+      ]
+    }
+  },
+  "minimum-stability": "stable",
+  "prefer-stable": true
+}

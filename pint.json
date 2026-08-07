@@ -1,0 +1,13 @@
+{
+  "preset": "laravel",
+  "rules": {
+    "php_unit_method_casing": {
+      "case": "camel_case"
+    },
+    "new_with_parentheses": {
+        "anonymous_class": false,
+        "named_class": true
+    },
+    "single_line_empty_body": false
+  }
+}

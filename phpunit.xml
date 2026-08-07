@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit
+        backupGlobals="false"
+        backupStaticProperties="false"
+        colors="true"
+>
+  <testsuites>
+    <testsuite name="Pin Upload Test Suite">
+      <directory>tests</directory>
+    </testsuite>
+  </testsuites>
+  <source>
+    <include>
+      <directory>src</directory>
+    </include>
+  </source>
+  <php>
+    <env name="APP_ENV" value="testing"/>
+    <env name="APP_KEY" value="base64:EoS0Lz1KKloP4sqZfBU22+Bi5a07+TxIrCJV/ATUR64="/>
+    <env name="DB_CONNECTION" value="sqlite"/>
+    <env name="SESSION_DRIVER" value="array"/>
+    <env name="REDIS_DB" value="10"/>
+    <env name="REDIS_CACHE_DB" value="10"/>
+    <env name="TESTING_REPORT_REQUEST_ENABLED" value="false" />
+  </php>
+</phpunit>

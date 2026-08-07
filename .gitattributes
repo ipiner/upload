@@ -1,0 +1,9 @@
+* text=auto
+*.md diff=markdown
+*.php diff=php
+
+.gitattributes export-ignore
+.github export-ignore
+.gitignore export-ignore
+phpunit.xml export-ignore
+tests export-ignore
