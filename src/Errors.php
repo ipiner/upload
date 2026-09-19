@@ -16,9 +16,9 @@ enum Errors: string implements IError
 {
     use Errorful;
 
-    // upload
     case UploadExtensionInvalid = '3000|422|upload_extension_invalid';
     case UploadMimeTypeInvalid = '3001|422|upload_mime_type_invalid';
     case UploadSizeTooSmall = '3002|422|upload_size_too_small';
     case UploadSizeTooLarge = '3003|422|upload_size_too_large';
+    case UploadInvalid = '3004|422|upload_invalid';
 }

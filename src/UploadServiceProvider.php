@@ -13,15 +13,19 @@ use Pin\Support\ServiceProvider;
 class UploadServiceProvider extends ServiceProvider
 {
     /**
-     * Bootstrap the application services.
+     * 在其他服务启动前加载默认配置。
      */
+    public function register(): void
+    {
+        $this->mergeConfigFrom(__DIR__.'/../config/upload.php', 'pin.upload');
+    }
+
     public function boot(): void
     {
         Registry::register(Errors::cases());
-        $this->mergeConfigFrom(__DIR__.'/../config/upload.php', 'pin.upload');
         $this->loadTranslationsFrom(__DIR__.'/../lang', 'pin-upload');
         $this->publishes([
-            __DIR__.'/../lang' => $this->app->langPath('vendor/pin'),
+            __DIR__.'/../lang' => $this->app->langPath('vendor/pin-upload'),
         ], 'pin-upload-errors');
     }
 }

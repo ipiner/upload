@@ -1,23 +1,30 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Pin\Upload;
 
 use Illuminate\Contracts\Filesystem\Filesystem;
+use Illuminate\Filesystem\FilesystemAdapter;
+use Illuminate\Http\UploadedFile as HttpUploadedFile;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Fluent;
 use Illuminate\Support\Str;
 use Intervention\Image\ImageManager;
 use Intervention\Image\Interfaces\ImageInterface;
+use InvalidArgumentException;
+use League\Flysystem\Local\LocalFilesystemAdapter;
+use League\Flysystem\WhitespacePathNormalizer;
+use LogicException;
 use Pin\Errors\Translator;
 use Symfony\Component\HttpFoundation\File\File;
+use Symfony\Component\Mime\MimeTypes;
 
 /**
- * UploadedFile
+ * 封装上传验证结果、存储信息及本地图片处理。
  *
- * 上传文件统一封装类（增强版），基于 Laravel UploadedFile 扩展
- *
- * @property string $pathname 文件绝对路径
+ * @property string $pathname 本地源文件绝对路径
  * @property string $path 相对路径（基于 disk）
  * @property string $name 文件名
  * @property string $file_id 文件uuid
@@ -25,7 +32,7 @@ use Symfony\Component\HttpFoundation\File\File;
  * @property int|null $width 图片宽度
  * @property int|null $height 图片高度
  * @property string $extension 扩展名
- * @property string $mime_type MIME 类型
+ * @property string|null $mime_type MIME 类型
  * @property array $original 客户端原始信息
  * @property array|null $thumb 缩略图信息
  * @property array|null $water 水印信息
@@ -35,16 +42,17 @@ use Symfony\Component\HttpFoundation\File\File;
 class UploadedFile extends Fluent
 {
     /**
-     * 原始 UploadedFile 对象
+     * 当前本地文件，存储或移动到本地磁盘后同步更新。
      */
     public File $file;
 
     /**
-     * 构造函数
+     * 文件验证错误也会保留，供请求结束时记录上传日志。
      */
-    public function __construct(\Illuminate\Http\UploadedFile $file, array $errors, public array $uploadConfig)
+    public function __construct(HttpUploadedFile $file, array $errors, public array $uploadConfig)
     {
         $this->file = $file;
+        $mimeType = $file->getMimeType();
 
         parent::__construct([
             'file_id' => Str::uuid()->toString(),
@@ -55,9 +63,9 @@ class UploadedFile extends Fluent
             'name' => $file->getFilename(),
 
             // 文件基本属性
-            'extension' => $file->extension() ?: $file->clientExtension(),
+            'extension' => MimeTypes::getDefault()->getExtensions($mimeType ?? '')[0] ?? $file->clientExtension() ?? '',
             'size' => $file->getSize(),
-            'mime_type' => $file->getMimeType(),
+            'mime_type' => $mimeType,
 
             // 客户端信息
             'original' => [
@@ -75,16 +83,15 @@ class UploadedFile extends Fluent
 
         // 如果是图片，自动获取尺寸
         if ($this->isImage()) {
-            [$this->width, $this->height] = getimagesize($this->pathname) ?: [0, 0];
+            // 部分 image/* 格式或损坏图片可能无法读取尺寸。
+            [$this->width, $this->height] = @getimagesize($this->pathname) ?: [0, 0];
         }
     }
 
     /**
-     * 获取已验证的文件
-     *
-     * @return static|null
+     * 获取经过验证的文件（包含验证失败的文件）。
      */
-    public static function item(\Illuminate\Http\UploadedFile|string $hash)
+    public static function item(HttpUploadedFile|string $hash): ?static
     {
         $items = static::items();
         $hash = is_string($hash) ? $hash : spl_object_hash($hash);
@@ -106,14 +113,14 @@ class UploadedFile extends Fluent
      * 标记文件为已验证，并存入 request
      */
     public static function validated(
-        \Illuminate\Http\UploadedFile $file,
+        HttpUploadedFile $file,
         array $errors,
         array $uploadConfig
     ): void {
-        $items = app()->request->attributes->get('uploaded-files', []);
+        $items = static::items();
 
         $items[spl_object_hash($file)] = app(
-            UploadedFile::class,
+            static::class,
             compact('file', 'errors', 'uploadConfig')
         );
 
@@ -141,7 +148,7 @@ class UploadedFile extends Fluent
 
         $replace = array_merge(['attribute' => ''], $replace);
 
-        return Arr::map($this->errors, fn ($s) => Translator::trans($s, $replace));
+        return Arr::map($this->errors, static fn (string $message): string => Translator::trans($message, $replace));
     }
 
     /**
@@ -149,11 +156,11 @@ class UploadedFile extends Fluent
      */
     public function isImage(): bool
     {
-        return str_starts_with($this->mime_type, 'image/');
+        return str_starts_with($this->mime_type ?? '', 'image/');
     }
 
     /**
-     * 移动文件（物理移动）
+     * 在本地磁盘上物理移动文件。
      *
      * @param  string  $path  相对路径
      * @param  string|null  $name  文件名
@@ -161,11 +168,13 @@ class UploadedFile extends Fluent
     public function move(string $path, ?string $name = null): ?File
     {
         $name = $name ?: $this->hashName();
+        $disk = $this->disk();
 
-        $file = $this->file->move(
-            $this->disk()->path($path),
-            $name
-        );
+        if (! $this->isLocalDisk($disk)) {
+            throw new LogicException('Moving uploaded files requires a local disk.');
+        }
+
+        $file = $this->file->move($disk->path($path), $name);
 
         $this->moved($file);
 
@@ -173,18 +182,22 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 存储文件（Laravel Storage）
+     * 流式存储当前文件，失败时保留原有文件信息。
      */
     public function storeAs(string $path, ?string $name = null, array|string $options = []): false|null|string
     {
         $name = $name ?: $this->hashName();
+        $options = $this->parseOptions($options);
+        $diskName = Arr::pull($options, 'disk') ?? Storage::getDefaultDriver();
 
-        $path = $this->file->storeAs(
-            $path,
-            $name,
-            $this->parseOptions($options)
-        );
+        $path = $this->storeFile(Storage::disk($diskName), $path, $name, $options);
 
+        if ($path === false) {
+            return false;
+        }
+
+        $this->uploadConfig['disk'] = $diskName;
+        $this->disk = $diskName;
         $this->stored($path);
 
         return $path;
@@ -204,30 +217,40 @@ class UploadedFile extends Fluent
         ?int $height = null,
         ?string $source = null
     ): void {
-        // 支持配置 key
-        $key = $width.$height;
+        $key = (string) $width.($height === null ? '' : 'x'.$height);
 
         if (is_string($width)) {
             $key = $width;
-            $height = config('pin.upload.thumb.'.$width.'.height');
-            $width = config('pin.upload.thumb.'.$width.'.width');
+            $dimensions = config('pin.upload.thumb.'.$key);
+
+            if (! is_array($dimensions) || strpbrk($key, "/\\\0") !== false) {
+                throw new InvalidArgumentException('Unknown or invalid thumbnail preset: '.$key);
+            }
+
+            $width = $dimensions['width'] ?? null;
+            $height = $dimensions['height'] ?? null;
+        }
+
+        if (($width === null && $height === null)
+            || ($width !== null && (! is_int($width) || $width <= 0))
+            || ($height !== null && (! is_int($height) || $height <= 0))) {
+            throw new InvalidArgumentException('Thumbnail dimensions must be positive integers with at least one dimension set.');
         }
 
         $pathname = $replace ? $this->pathname : $this->thumbSaveTo($key);
 
-        $thumb = ImageManager::gd()
+        $thumb = $this->imageManager()
             ->read($source ?: $this->pathname)
             ->scaleDown($width, $height)
-            ->save($pathname, 100);
+            ->save($pathname, quality: 100);
 
+        clearstatcache(true, $pathname);
         $filesize = filesize($pathname);
         $size = $thumb->size();
 
         if ($replace) {
             // 覆盖原图
-            $this->attributes['original']['size'] = $this->size;
-            $this->attributes['original']['width'] = $this->width;
-            $this->attributes['original']['height'] = $this->height;
+            $this->rememberOriginal();
 
             $this->size = $filesize;
             $this->width = $size->width();
@@ -273,15 +296,16 @@ class UploadedFile extends Fluent
     ): void {
         $pathname = $replace ? $this->pathname : $this->waterSaveTo();
 
-        ImageManager::gd()
+        $this->imageManager()
             ->read($this->pathname)
             ->place($image, $position, $x, $y, $opacity)
-            ->save($pathname, 100);
+            ->save($pathname, quality: 100);
 
+        clearstatcache(true, $pathname);
         $filesize = filesize($pathname);
 
         if ($replace) {
-            $this->attributes['original']['size'] = $this->size;
+            $this->rememberOriginal();
             $this->size = $filesize;
         } else {
             $this->water = [
@@ -298,7 +322,35 @@ class UploadedFile extends Fluent
      */
     protected function hashName(): string
     {
-        return $this->file_id.'.'.$this->extension;
+        return $this->file_id.($this->extension ? '.'.$this->extension : '');
+    }
+
+    /**
+     * 可在子类中替换为 Imagick 等图像驱动。
+     */
+    protected function imageManager(): ImageManager
+    {
+        return ImageManager::gd();
+    }
+
+    /**
+     * 判断磁盘是否使用本地文件系统。
+     */
+    protected function isLocalDisk(Filesystem $disk): bool
+    {
+        return $disk instanceof FilesystemAdapter && $disk->getAdapter() instanceof LocalFilesystemAdapter;
+    }
+
+    /**
+     * 多次处理图片时，保留首次处理前的信息。
+     */
+    protected function rememberOriginal(): void
+    {
+        $this->attributes['original'] += [
+            'size' => $this->size,
+            'width' => $this->width,
+            'height' => $this->height,
+        ];
     }
 
     /**
@@ -332,11 +384,10 @@ class UploadedFile extends Fluent
      */
     protected function path(?string $pathname = null): string
     {
-        return str_replace(
-            str_replace('\\', '/', $this->disk()->path('/')),
-            '',
-            str_replace('\\', '/', $pathname ?: $this->file->getPathname()),
-        );
+        $root = rtrim(str_replace('\\', '/', $this->disk()->path('/')), '/').'/';
+        $pathname = str_replace('\\', '/', $pathname ?? $this->file->getPathname());
+
+        return str_starts_with($pathname, $root) ? substr($pathname, strlen($root)) : $pathname;
     }
 
     /**
@@ -344,9 +395,41 @@ class UploadedFile extends Fluent
      */
     protected function stored(string $path): void
     {
-        $this->pathname = $this->disk()->path($path);
         $this->path = $path;
         $this->name = basename($path);
+        $disk = $this->disk();
+
+        // 远程存储保留本地源文件。
+        if (! $this->isLocalDisk($disk)) {
+            return;
+        }
+
+        // 本地存储切换到新副本，后续图片处理和移动使用同一文件。
+        $this->file = new File($disk->path($path));
+        $this->pathname = $this->file->getPathname();
+    }
+
+    /**
+     * 同一本地文件无需再次复制，避免读写同一路径时清空源文件。
+     */
+    protected function storeFile(Filesystem $disk, string $path, string $name, array $options): string|false
+    {
+        if (! $this->isLocalDisk($disk)) {
+            return $disk->putFileAs($path, $this->file, $name, $options);
+        }
+
+        $targetPath = (new WhitespacePathNormalizer())->normalizePath(trim($path.'/'.$name, '/'));
+        $target = realpath($disk->path($targetPath));
+
+        if ($target === false || $target !== $this->file->getRealPath()) {
+            return $disk->putFileAs($path, $this->file, $name, $options);
+        }
+
+        if (isset($options['visibility']) && ! $disk->setVisibility($targetPath, $options['visibility'])) {
+            return false;
+        }
+
+        return $targetPath;
     }
 
     /**

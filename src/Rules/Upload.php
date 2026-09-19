@@ -8,9 +8,11 @@ use Closure;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Arr;
+use InvalidArgumentException;
 use Pin\Errors\IError;
 use Pin\Support\Size;
 use Pin\Upload\Errors;
+use Pin\Upload\UploadedFile as ValidatedFile;
 use Symfony\Component\Mime\MimeTypes;
 
 /**
@@ -19,8 +21,7 @@ use Symfony\Component\Mime\MimeTypes;
 class Upload implements ValidationRule
 {
     /**
-     * 错误集合
-     * [code => message]
+     * @var array<int, string> 当前文件的验证错误
      */
     protected array $errors = [];
 
@@ -40,6 +41,11 @@ class Upload implements ValidationRule
     protected UploadedFile $file;
 
     /**
+     * 当前验证期间复用文件信息，避免反复探测 MIME 和读取文件大小。
+     */
+    protected array $fileInfo = [];
+
+    /**
      * 构造函数
      *
      * @param  bool  $failWithCode  是否返回错误码（code|message）
@@ -47,6 +53,7 @@ class Upload implements ValidationRule
     public function __construct(protected bool $failWithCode = true)
     {
         $this->max($this->config['max']);
+        $this->min($this->config['min']);
         $this->extensions($this->config['extensions']);
     }
 
@@ -69,11 +76,16 @@ class Upload implements ValidationRule
             $extensions = explode(',', $extensions);
         }
 
-        $this->config['extensions'] = $extensions;
+        $this->config['extensions'] = array_values(array_unique(array_filter(
+            array_map(static fn (string $extension): string => strtolower(trim($extension)), $extensions),
+            static fn (string $extension): bool => $extension !== ''
+        )));
+        $this->config['mimetypes'] = [];
 
-        // 根据扩展名生成 MIME 类型映射
-        foreach ($this->config['extensions'] as $ext) {
-            $this->config['mimetypes'][$ext] = MimeTypes::getDefault()->getMimeTypes($ext);
+        $mimeTypes = MimeTypes::getDefault();
+
+        foreach ($this->config['extensions'] as $extension) {
+            $this->config['mimetypes'][$extension] = $mimeTypes->getMimeTypes($extension);
         }
 
         return $this;
@@ -84,7 +96,7 @@ class Upload implements ValidationRule
      */
     public function max(int|string $max): static
     {
-        $this->config['max'] = is_int($max) ? $max : Size::toBytes($max);
+        $this->config['max'] = $this->sizeInBytes($max);
 
         return $this;
     }
@@ -94,7 +106,7 @@ class Upload implements ValidationRule
      */
     public function min(int|string $min): static
     {
-        $this->config['min'] = is_int($min) ? $min : Size::toBytes($min);
+        $this->config['min'] = $this->sizeInBytes($min);
 
         return $this;
     }
@@ -108,15 +120,41 @@ class Upload implements ValidationRule
      */
     public function validate(string $attribute, mixed $value, Closure $fail): void
     {
+        $this->errors = [];
+        $this->fileInfo = [];
+
+        if (! $value instanceof UploadedFile || ! $value->isValid()) {
+            $this->addError(Errors::UploadInvalid, []);
+            $this->fail($fail);
+
+            return;
+        }
+
         $this->file = $value;
 
         if (! $this->check()) {
-            foreach ($this->errors as $code => $message) {
-                $fail($this->failWithCode ? $code.'|'.$message : $message);
-            }
+            $this->fail($fail);
         }
 
-        \Pin\Upload\UploadedFile::validated($this->file, $this->errors, $this->config);
+        ValidatedFile::validated($this->file, $this->errors, $this->config);
+    }
+
+    protected function fail(Closure $fail): void
+    {
+        foreach ($this->errors as $code => $message) {
+            $fail($this->failWithCode ? $code.'|'.$message : $message);
+        }
+    }
+
+    protected function sizeInBytes(int|string $size): int
+    {
+        $bytes = is_int($size) ? $size : Size::toBytes($size);
+
+        if ($bytes < 0) {
+            throw new InvalidArgumentException('Upload size limits must not be negative.');
+        }
+
+        return $bytes;
     }
 
     /**
@@ -137,20 +175,26 @@ class Upload implements ValidationRule
      */
     protected function check(): bool
     {
-        return empty(array_filter([
-            $this->validateMin(),
-            $this->validateMax(),
-            $this->validateExtension(),
-            $this->validateMimeType(),
-        ]));
+        $this->fileInfo = [
+            'size' => $this->file->getSize(),
+            'mime_type' => $this->file->getMimeType(),
+        ];
+
+        // 收集全部错误，供请求验证和上传日志共用。
+        $this->validateMin();
+        $this->validateMax();
+        $this->validateExtension();
+        $this->validateMimeType();
+
+        return $this->errors === [];
     }
 
     /**
-     * 不区分大小写的 in_array 判断
+     * 扩展名和 MIME 配置已归一化，只需转换待比较的值。
      */
     protected function inArray(?string $needle, array $haystack): bool
     {
-        return $needle && in_array(strtoupper($needle), array_map('strtoupper', $haystack));
+        return $needle !== null && in_array(strtolower($needle), $haystack, true);
     }
 
     /**
@@ -158,14 +202,18 @@ class Upload implements ValidationRule
      */
     protected function validateExtension(): int
     {
-        if ($this->inArray($this->file->extension(), $this->config['extensions'])) {
+        $mimeType = $this->fileInfo['mime_type'] ?? $this->file->getMimeType();
+        $extensions = MimeTypes::getDefault()->getExtensions($mimeType ?? '');
+
+        // 根据实际内容判断，并兼容 jpg/jpeg 等等价扩展名。
+        if (array_intersect($extensions, $this->config['extensions'])) {
             return 0;
         }
 
         return $this->addError(
             Errors::UploadExtensionInvalid,
             [
-                'value' => $this->file->extension(),
+                'value' => $extensions[0] ?? '',
                 'name' => $this->file->getClientOriginalName(),
                 'extensions' => implode('、', $this->config['extensions']),
             ]
@@ -177,14 +225,16 @@ class Upload implements ValidationRule
      */
     protected function validateMax(): int
     {
-        if ($this->config['max'] == 0 || $this->file->getSize() <= $this->config['max']) {
+        $size = $this->fileInfo['size'] ?? $this->file->getSize();
+
+        if ($this->config['max'] === 0 || $size <= $this->config['max']) {
             return 0;
         }
 
         return $this->addError(
             Errors::UploadSizeTooLarge,
             [
-                'value' => Size::format($this->file->getSize()),
+                'value' => Size::format($size),
                 'max' => Size::format($this->config['max']),
                 'name' => $this->file->getClientOriginalName(),
             ]
@@ -196,19 +246,19 @@ class Upload implements ValidationRule
      */
     protected function validateMimeType(): int
     {
-        $mimetype = $this->file->getMimeType();
-        $allows = $this->config['mimetypes'][$this->file->extension()] ?? [];
+        $mimeType = $this->fileInfo['mime_type'] ?? $this->file->getMimeType();
+        $allowedMimeTypes = array_values(array_unique(Arr::flatten($this->config['mimetypes'])));
 
-        if ($this->inArray($mimetype, $allows)) {
+        if ($this->inArray($mimeType, $allowedMimeTypes)) {
             return 0;
         }
 
         return $this->addError(
             Errors::UploadMimeTypeInvalid,
             [
-                'value' => $mimetype,
+                'value' => $mimeType,
                 'name' => $this->file->getClientOriginalName(),
-                'mimetypes' => implode('、', Arr::flatten($allows ?: $this->config['mimetypes'])),
+                'mimetypes' => implode('、', $allowedMimeTypes),
             ]
         );
     }
@@ -218,14 +268,16 @@ class Upload implements ValidationRule
      */
     protected function validateMin(): int
     {
-        if ($this->config['min'] == 0 || $this->file->getSize() > $this->config['min']) {
+        $size = $this->fileInfo['size'] ?? $this->file->getSize();
+
+        if ($this->config['min'] === 0 || $size >= $this->config['min']) {
             return 0;
         }
 
         return $this->addError(
             Errors::UploadSizeTooSmall,
             [
-                'value' => Size::format($this->file->getSize()),
+                'value' => Size::format($size),
                 'min' => Size::format($this->config['min']),
                 'name' => $this->file->getClientOriginalName(),
             ]
