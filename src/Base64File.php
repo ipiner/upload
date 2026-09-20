@@ -9,24 +9,20 @@ use Symfony\Component\HttpFoundation\File\Exception\FileException;
 use Symfony\Component\HttpFoundation\File\File;
 
 /**
- * 将 Base64 Data URI 解码为临时文件，供文件验证和存储使用。
+ * Base64 上传文件。
  */
 class Base64File extends File
 {
-    /** @var resource|null 随对象释放，自动删除尚未移动的临时文件 */
+    /** @var resource|false|null 临时文件句柄 */
     protected mixed $tempFile = null;
 
     /**
-     * @param  string  $base64Content  Base64 内容（格式：data:image/png;base64,...）
-     * @param  string|null  $name  可选字段名，用于绑定到 request（方便后续获取）
+     * @param  string  $base64Content  Base64 Data URI
+     * @param  string|null  $name  请求字段名
      */
     public function __construct(string $base64Content, ?string $name = null)
     {
-        parent::__construct(
-            $this->getTempFile(
-                $this->getFileContentFromBase64($base64Content)
-            )
-        );
+        parent::__construct($this->getTempFile($this->getFileContentFromBase64($base64Content)));
 
         if ($name !== null && $name !== '') {
             app()->request->attributes->set('base64file.'.$name, $this);
@@ -34,7 +30,7 @@ class Base64File extends File
     }
 
     /**
-     * 提取并严格解码 Data URI，不信任头部声明的 MIME 类型。
+     * 解码 Base64 Data URI。
      *
      * @throws InvalidArgumentException
      */

@@ -86,11 +86,9 @@ it('validates extension', function () {
 });
 
 it('validates mime type', function () {
-    expect($this->upload->validateExtension())->toBe(0);
+    expect($this->upload->validateMimeType())->toBe(0);
 
-    $this->upload->config = array_merge($this->upload->config, [
-        'mimetypes' => [],
-    ]);
+    $this->upload->extensions([]);
     expect($this->upload->validateMimeType())
         ->toBe(Errors::UploadMimeTypeInvalid->code());
 });
@@ -121,8 +119,11 @@ it('does not retain validation errors between files', function () {
 it('accepts inclusive size limits and treats zero as unlimited', function () {
     $file = UploadedFile::fake()->image('test.png')->size(1);
 
-    expect(Validator::make(['file' => $file], ['file' => new Upload()->min(1024)->max(1024)])->passes())->toBeTrue()
-        ->and(Validator::make(['file' => $file], ['file' => new Upload()->min(0)->max(0)])->passes())->toBeTrue();
+    $bounded = Validator::make(['file' => $file], ['file' => new Upload()->min(1024)->max(1024)]);
+    $unlimited = Validator::make(['file' => $file], ['file' => new Upload()->min(0)->max(0)]);
+
+    expect($bounded->passes())->toBeTrue()
+        ->and($unlimited->passes())->toBeTrue();
 });
 
 it('rejects negative size limits', function (string $method) {
@@ -175,4 +176,28 @@ it('detects the actual content instead of trusting the client filename and MIME 
 
     expect(Validator::make(['file' => $file], ['file' => new Upload()])->fails())->toBeTrue()
         ->and(ValidatedFile::item($file)->mime_type)->toBe('text/plain');
+});
+
+it('reuses an unknown MIME result across content checks', function () {
+    $source = UploadedFile::fake()->createWithContent('test.bin', 'unknown');
+    $file = Mockery::mock(UploadedFile::class, [
+        $source->getPathname(), 'test.bin', 'application/octet-stream', null, true,
+    ])->makePartial();
+    $file->shouldReceive('getMimeType')->twice()->andReturnNull();
+
+    expect(Validator::make(['file' => $file], ['file' => new Upload()])->fails())->toBeTrue()
+        ->and(ValidatedFile::item($file)->mime_type)->toBeNull();
+});
+
+it('uses the new MIME allowlist when reusing a rule', function () {
+    $rule = new Upload()->extensions('png');
+    $image = UploadedFile::fake()->image('test.png');
+    $text = UploadedFile::fake()->createWithContent('test.txt', 'hello world');
+
+    expect(Validator::make(['file' => $image], ['file' => $rule])->passes())->toBeTrue();
+
+    $rule->extensions('txt');
+
+    expect(Validator::make(['file' => $text], ['file' => $rule])->passes())->toBeTrue()
+        ->and(Validator::make(['file' => $image], ['file' => $rule])->fails())->toBeTrue();
 });

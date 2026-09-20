@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Pin\Upload;
 
+use Override;
 use Pin\Errors\Registry;
 use Pin\Support\ServiceProvider;
 
@@ -13,13 +14,17 @@ use Pin\Support\ServiceProvider;
 class UploadServiceProvider extends ServiceProvider
 {
     /**
-     * 在其他服务启动前加载默认配置。
+     * 注册上传配置。
      */
+    #[Override]
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/upload.php', 'pin.upload');
     }
 
+    /**
+     * 注册上传错误。
+     */
     public function boot(): void
     {
         Registry::register(Errors::cases());

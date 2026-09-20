@@ -9,6 +9,7 @@ use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Arr;
 use InvalidArgumentException;
+use Override;
 use Pin\Errors\IError;
 use Pin\Support\Size;
 use Pin\Upload\Errors;
@@ -16,7 +17,7 @@ use Pin\Upload\UploadedFile as ValidatedFile;
 use Symfony\Component\Mime\MimeTypes;
 
 /**
- * Upload 文件上传验证规则
+ * 文件上传验证规则。
  */
 class Upload implements ValidationRule
 {
@@ -29,9 +30,9 @@ class Upload implements ValidationRule
      * 配置项
      */
     protected array $config = [
-        'disk' => null,                 // 存储磁盘
-        'min' => 0,                    // 最小文件大小（字节）
-        'max' => '5M',                 // 最大文件大小
+        'disk' => null,                        // 存储磁盘
+        'min' => 0,                            // 最小文件大小（字节）
+        'max' => '5M',                         // 最大文件大小
         'extensions' => 'jpg,jpeg,gif,png,webp', // 允许扩展名
     ];
 
@@ -41,13 +42,16 @@ class Upload implements ValidationRule
     protected UploadedFile $file;
 
     /**
-     * 当前验证期间复用文件信息，避免反复探测 MIME 和读取文件大小。
+     * @var array{}|array{size: int, mime_type: string|null} 文件信息
      */
     protected array $fileInfo = [];
 
     /**
-     * 构造函数
-     *
+     * @var list<string> 允许的 MIME 类型
+     */
+    protected array $allowedMimeTypes = [];
+
+    /**
      * @param  bool  $failWithCode  是否返回错误码（code|message）
      */
     public function __construct(protected bool $failWithCode = true)
@@ -69,6 +73,8 @@ class Upload implements ValidationRule
 
     /**
      * 设置允许的扩展名
+     *
+     * @param  string|array<string>  $extensions
      */
     public function extensions(string|array $extensions): static
     {
@@ -77,7 +83,10 @@ class Upload implements ValidationRule
         }
 
         $this->config['extensions'] = array_values(array_unique(array_filter(
-            array_map(static fn (string $extension): string => strtolower(trim($extension)), $extensions),
+            array_map(
+                static fn (string $extension): string => strtolower(trim($extension)),
+                $extensions
+            ),
             static fn (string $extension): bool => $extension !== ''
         )));
         $this->config['mimetypes'] = [];
@@ -87,6 +96,10 @@ class Upload implements ValidationRule
         foreach ($this->config['extensions'] as $extension) {
             $this->config['mimetypes'][$extension] = $mimeTypes->getMimeTypes($extension);
         }
+
+        $this->allowedMimeTypes = array_values(
+            array_unique(Arr::flatten($this->config['mimetypes']))
+        );
 
         return $this;
     }
@@ -112,12 +125,9 @@ class Upload implements ValidationRule
     }
 
     /**
-     * 执行验证
-     *
-     * @param  string  $attribute  字段名
-     * @param  mixed  $value  上传文件
-     * @param  Closure  $fail  失败回调
+     * 验证上传文件。
      */
+    #[Override]
     public function validate(string $attribute, mixed $value, Closure $fail): void
     {
         $this->errors = [];
@@ -139,6 +149,9 @@ class Upload implements ValidationRule
         ValidatedFile::validated($this->file, $this->errors, $this->config);
     }
 
+    /**
+     * 报告验证错误。
+     */
     protected function fail(Closure $fail): void
     {
         foreach ($this->errors as $code => $message) {
@@ -146,6 +159,17 @@ class Upload implements ValidationRule
         }
     }
 
+    /**
+     * 获取文件 MIME 类型。
+     */
+    protected function fileMimeType(): ?string
+    {
+        return $this->fileInfo ? $this->fileInfo['mime_type'] : $this->file->getMimeType();
+    }
+
+    /**
+     * 换算文件大小。
+     */
     protected function sizeInBytes(int|string $size): int
     {
         $bytes = is_int($size) ? $size : Size::toBytes($size);
@@ -163,11 +187,12 @@ class Upload implements ValidationRule
      * @param  array  $replace  占位符替换
      * @return int 错误码
      */
-    protected function addError(IError $err, array $replace): int
+    protected function addError(IError $error, array $replace): int
     {
-        $this->errors[$err->code()] = $err->message($replace);
+        $code = $error->code();
+        $this->errors[$code] = $error->message($replace);
 
-        return $err->code();
+        return $code;
     }
 
     /**
@@ -180,7 +205,6 @@ class Upload implements ValidationRule
             'mime_type' => $this->file->getMimeType(),
         ];
 
-        // 收集全部错误，供请求验证和上传日志共用。
         $this->validateMin();
         $this->validateMax();
         $this->validateExtension();
@@ -190,7 +214,7 @@ class Upload implements ValidationRule
     }
 
     /**
-     * 扩展名和 MIME 配置已归一化，只需转换待比较的值。
+     * 忽略大小写匹配。
      */
     protected function inArray(?string $needle, array $haystack): bool
     {
@@ -202,10 +226,8 @@ class Upload implements ValidationRule
      */
     protected function validateExtension(): int
     {
-        $mimeType = $this->fileInfo['mime_type'] ?? $this->file->getMimeType();
-        $extensions = MimeTypes::getDefault()->getExtensions($mimeType ?? '');
+        $extensions = MimeTypes::getDefault()->getExtensions($this->fileMimeType() ?? '');
 
-        // 根据实际内容判断，并兼容 jpg/jpeg 等等价扩展名。
         if (array_intersect($extensions, $this->config['extensions'])) {
             return 0;
         }
@@ -246,10 +268,9 @@ class Upload implements ValidationRule
      */
     protected function validateMimeType(): int
     {
-        $mimeType = $this->fileInfo['mime_type'] ?? $this->file->getMimeType();
-        $allowedMimeTypes = array_values(array_unique(Arr::flatten($this->config['mimetypes'])));
+        $mimeType = $this->fileMimeType();
 
-        if ($this->inArray($mimeType, $allowedMimeTypes)) {
+        if ($this->inArray($mimeType, $this->allowedMimeTypes)) {
             return 0;
         }
 
@@ -258,7 +279,7 @@ class Upload implements ValidationRule
             [
                 'value' => $mimeType,
                 'name' => $this->file->getClientOriginalName(),
-                'mimetypes' => implode('、', $allowedMimeTypes),
+                'mimetypes' => implode('、', $this->allowedMimeTypes),
             ]
         );
     }

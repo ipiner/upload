@@ -22,12 +22,12 @@ use Symfony\Component\HttpFoundation\File\File;
 use Symfony\Component\Mime\MimeTypes;
 
 /**
- * 封装上传验证结果、存储信息及本地图片处理。
+ * 上传文件。
  *
  * @property string $pathname 本地源文件绝对路径
  * @property string $path 相对路径（基于 disk）
  * @property string $name 文件名
- * @property string $file_id 文件uuid
+ * @property string $file_id 文件 UUID
  * @property int $size 文件大小（字节）
  * @property int|null $width 图片宽度
  * @property int|null $height 图片高度
@@ -37,17 +37,17 @@ use Symfony\Component\Mime\MimeTypes;
  * @property array|null $thumb 缩略图信息
  * @property array|null $water 水印信息
  * @property string|null $disk 存储磁盘
- * @property array $errors 验证错误
+ * @property array<int, string> $errors 验证错误
  */
 class UploadedFile extends Fluent
 {
     /**
-     * 当前本地文件，存储或移动到本地磁盘后同步更新。
+     * 本地文件。
      */
     public File $file;
 
     /**
-     * 文件验证错误也会保留，供请求结束时记录上传日志。
+     * @param  array<int, string>  $errors  验证错误
      */
     public function __construct(HttpUploadedFile $file, array $errors, public array $uploadConfig)
     {
@@ -57,52 +57,44 @@ class UploadedFile extends Fluent
         parent::__construct([
             'file_id' => Str::uuid()->toString(),
 
-            // 文件路径信息
             'pathname' => $file->getPathname(),
             'path' => $this->path(),
             'name' => $file->getFilename(),
 
-            // 文件基本属性
-            'extension' => MimeTypes::getDefault()->getExtensions($mimeType ?? '')[0] ?? $file->clientExtension() ?? '',
+            'extension' => MimeTypes::getDefault()->getExtensions($mimeType ?? '')[0]
+                ?? $file->clientExtension() ?? '',
             'size' => $file->getSize(),
             'mime_type' => $mimeType,
 
-            // 客户端信息
             'original' => [
                 'name' => $file->getClientOriginalName(),
                 'extension' => $file->getClientOriginalExtension(),
                 'mime_type' => $file->getClientMimeType(),
             ],
 
-            // 存储磁盘
             'disk' => $this->uploadConfig['disk'] ?? null,
-
-            // 验证错误
             'errors' => $errors,
         ]);
 
-        // 如果是图片，自动获取尺寸
         if ($this->isImage()) {
-            // 部分 image/* 格式或损坏图片可能无法读取尺寸。
             [$this->width, $this->height] = @getimagesize($this->pathname) ?: [0, 0];
         }
     }
 
     /**
-     * 获取经过验证的文件（包含验证失败的文件）。
+     * 获取上传验证结果。
      */
     public static function item(HttpUploadedFile|string $hash): ?static
     {
-        $items = static::items();
         $hash = is_string($hash) ? $hash : spl_object_hash($hash);
 
-        return $items[$hash] ?? null;
+        return static::items()[$hash] ?? null;
     }
 
     /**
-     * 获取当前请求中所有已验证的文件
+     * 获取当前请求的上传验证结果。
      *
-     * @return static[]
+     * @return array<string, static>
      */
     public static function items(): array
     {
@@ -110,7 +102,9 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 标记文件为已验证，并存入 request
+     * 记录上传验证结果。
+     *
+     * @param  array<int, string>  $errors
      */
     public static function validated(
         HttpUploadedFile $file,
@@ -138,17 +132,21 @@ class UploadedFile extends Fluent
     /**
      * 获取上传错误信息
      *
-     * @param  array  $replace  错误信息占位符替换参数（如 ['attribute' => '']）
+     * @param  array  $replace  占位符替换
+     * @return array<int, string>|null
      */
     public function getErrors(array $replace = []): ?array
     {
-        if (empty($this->errors)) {
+        if (! $this->errors) {
             return null;
         }
 
         $replace = array_merge(['attribute' => ''], $replace);
 
-        return Arr::map($this->errors, static fn (string $message): string => Translator::trans($message, $replace));
+        return Arr::map(
+            $this->errors,
+            static fn (string $message): string => Translator::trans($message, $replace)
+        );
     }
 
     /**
@@ -160,12 +158,12 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 在本地磁盘上物理移动文件。
+     * 移动本地文件。
      *
      * @param  string  $path  相对路径
      * @param  string|null  $name  文件名
      */
-    public function move(string $path, ?string $name = null): ?File
+    public function move(string $path, ?string $name = null): File
     {
         $name = $name ?: $this->hashName();
         $disk = $this->disk();
@@ -174,6 +172,7 @@ class UploadedFile extends Fluent
             throw new LogicException('Moving uploaded files requires a local disk.');
         }
 
+        $path = (new WhitespacePathNormalizer())->normalizePath($path);
         $file = $this->file->move($disk->path($path), $name);
 
         $this->moved($file);
@@ -182,10 +181,13 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 流式存储当前文件，失败时保留原有文件信息。
+     * 存储文件。
      */
-    public function storeAs(string $path, ?string $name = null, array|string $options = []): false|null|string
-    {
+    public function storeAs(
+        string $path,
+        ?string $name = null,
+        array|string $options = []
+    ): string|false {
         $name = $name ?: $this->hashName();
         $options = $this->parseOptions($options);
         $diskName = Arr::pull($options, 'disk') ?? Storage::getDefaultDriver();
@@ -217,26 +219,7 @@ class UploadedFile extends Fluent
         ?int $height = null,
         ?string $source = null
     ): void {
-        $key = (string) $width.($height === null ? '' : 'x'.$height);
-
-        if (is_string($width)) {
-            $key = $width;
-            $dimensions = config('pin.upload.thumb.'.$key);
-
-            if (! is_array($dimensions) || strpbrk($key, "/\\\0") !== false) {
-                throw new InvalidArgumentException('Unknown or invalid thumbnail preset: '.$key);
-            }
-
-            $width = $dimensions['width'] ?? null;
-            $height = $dimensions['height'] ?? null;
-        }
-
-        if (($width === null && $height === null)
-            || ($width !== null && (! is_int($width) || $width <= 0))
-            || ($height !== null && (! is_int($height) || $height <= 0))) {
-            throw new InvalidArgumentException('Thumbnail dimensions must be positive integers with at least one dimension set.');
-        }
-
+        [$key, $width, $height] = $this->thumbDimensions($width, $height);
         $pathname = $replace ? $this->pathname : $this->thumbSaveTo($key);
 
         $thumb = $this->imageManager()
@@ -245,27 +228,27 @@ class UploadedFile extends Fluent
             ->save($pathname, quality: 100);
 
         clearstatcache(true, $pathname);
-        $filesize = filesize($pathname);
-        $size = $thumb->size();
+        $fileSize = filesize($pathname);
+        $dimensions = $thumb->size();
 
         if ($replace) {
-            // 覆盖原图
             $this->rememberOriginal();
 
-            $this->size = $filesize;
-            $this->width = $size->width();
-            $this->height = $size->height();
-        } else {
-            // 保存为缩略图
-            $this->attributes['thumb'][$key] = [
-                'pathname' => $pathname,
-                'path' => $this->path($pathname),
-                'name' => basename($pathname),
-                'size' => $filesize,
-                'width' => $size->width(),
-                'height' => $size->height(),
-            ];
+            $this->size = $fileSize;
+            $this->width = $dimensions->width();
+            $this->height = $dimensions->height();
+
+            return;
         }
+
+        $this->attributes['thumb'][$key] = [
+            'pathname' => $pathname,
+            'path' => $this->path($pathname),
+            'name' => basename($pathname),
+            'size' => $fileSize,
+            'width' => $dimensions->width(),
+            'height' => $dimensions->height(),
+        ];
     }
 
     /**
@@ -302,23 +285,25 @@ class UploadedFile extends Fluent
             ->save($pathname, quality: 100);
 
         clearstatcache(true, $pathname);
-        $filesize = filesize($pathname);
+        $fileSize = filesize($pathname);
 
         if ($replace) {
             $this->rememberOriginal();
-            $this->size = $filesize;
-        } else {
-            $this->water = [
-                'pathname' => $pathname,
-                'path' => $this->path($pathname),
-                'name' => basename($pathname),
-                'size' => $filesize,
-            ];
+            $this->size = $fileSize;
+
+            return;
         }
+
+        $this->water = [
+            'pathname' => $pathname,
+            'path' => $this->path($pathname),
+            'name' => basename($pathname),
+            'size' => $fileSize,
+        ];
     }
 
     /**
-     * 生成文件名（基于 ID）
+     * 生成文件名。
      */
     protected function hashName(): string
     {
@@ -326,7 +311,7 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 可在子类中替换为 Imagick 等图像驱动。
+     * 获取图片处理器。
      */
     protected function imageManager(): ImageManager
     {
@@ -334,15 +319,16 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 判断磁盘是否使用本地文件系统。
+     * 是否为本地磁盘。
      */
     protected function isLocalDisk(Filesystem $disk): bool
     {
-        return $disk instanceof FilesystemAdapter && $disk->getAdapter() instanceof LocalFilesystemAdapter;
+        return $disk instanceof FilesystemAdapter
+            && $disk->getAdapter() instanceof LocalFilesystemAdapter;
     }
 
     /**
-     * 多次处理图片时，保留首次处理前的信息。
+     * 保留原图信息。
      */
     protected function rememberOriginal(): void
     {
@@ -399,21 +385,23 @@ class UploadedFile extends Fluent
         $this->name = basename($path);
         $disk = $this->disk();
 
-        // 远程存储保留本地源文件。
         if (! $this->isLocalDisk($disk)) {
             return;
         }
 
-        // 本地存储切换到新副本，后续图片处理和移动使用同一文件。
         $this->file = new File($disk->path($path));
         $this->pathname = $this->file->getPathname();
     }
 
     /**
-     * 同一本地文件无需再次复制，避免读写同一路径时清空源文件。
+     * 写入文件。
      */
-    protected function storeFile(Filesystem $disk, string $path, string $name, array $options): string|false
-    {
+    protected function storeFile(
+        Filesystem $disk,
+        string $path,
+        string $name,
+        array $options
+    ): string|false {
         if (! $this->isLocalDisk($disk)) {
             return $disk->putFileAs($path, $this->file, $name, $options);
         }
@@ -421,15 +409,50 @@ class UploadedFile extends Fluent
         $targetPath = (new WhitespacePathNormalizer())->normalizePath(trim($path.'/'.$name, '/'));
         $target = realpath($disk->path($targetPath));
 
-        if ($target === false || $target !== $this->file->getRealPath()) {
-            return $disk->putFileAs($path, $this->file, $name, $options);
+        if (! $target || $target !== $this->file->getRealPath()) {
+            return $disk->putFileAs($path, $this->file, $name, $options) === false
+                ? false : $targetPath;
         }
 
-        if (isset($options['visibility']) && ! $disk->setVisibility($targetPath, $options['visibility'])) {
+        // 同一文件仅更新权限。
+        if (isset($options['visibility'])
+            && ! $disk->setVisibility($targetPath, $options['visibility'])) {
             return false;
         }
 
         return $targetPath;
+    }
+
+    /**
+     * 解析缩略图尺寸。
+     *
+     * @return array{string, int|null, int|null}
+     */
+    protected function thumbDimensions(int|string|null $width, ?int $height): array
+    {
+        $key = (string) $width.($height === null ? '' : 'x'.$height);
+
+        if (is_string($width)) {
+            $key = $width;
+            $dimensions = config('pin.upload.thumb.'.$key);
+
+            if (! is_array($dimensions) || strpbrk($key, "/\\\0") !== false) {
+                throw new InvalidArgumentException('Unknown or invalid thumbnail preset: '.$key);
+            }
+
+            $width = $dimensions['width'] ?? null;
+            $height = $dimensions['height'] ?? null;
+        }
+
+        if (($width === null && $height === null)
+            || ($width !== null && (! is_int($width) || $width <= 0))
+            || ($height !== null && (! is_int($height) || $height <= 0))) {
+            throw new InvalidArgumentException(
+                'Thumbnail dimensions must be positive integers with at least one dimension set.'
+            );
+        }
+
+        return [$key, $width, $height];
     }
 
     /**

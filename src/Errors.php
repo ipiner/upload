@@ -9,7 +9,7 @@ use Pin\Errors\Errorful;
 use Pin\Errors\IError;
 
 /**
- * 上传错误码定义
+ * 上传错误码。
  */
 #[Group('pin-upload::upload')]
 enum Errors: string implements IError

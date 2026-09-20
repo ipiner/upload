@@ -9,6 +9,7 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Intervention\Image\ImageManager;
+use League\Flysystem\PathTraversalDetected;
 use Pin\Upload\UploadedFile as PinUploadedFile;
 
 beforeEach(function () {
@@ -165,7 +166,8 @@ it('keeps file contents when storing to the same local path again', function (st
     $item->storeAs('avatars', 'avatar.png');
     $content = $item->file->getContent();
 
-    expect($item->storeAs($path, 'avatar.png', ['visibility' => 'public']))->toBe('avatars/avatar.png')
+    expect($item->storeAs($path, 'avatar.png', ['visibility' => 'public']))
+        ->toBe('avatars/avatar.png')
         ->and($item->file->getContent())->toBe($content)
         ->and(Storage::disk('local')->getVisibility('avatars/avatar.png'))->toBe('public');
 })->with(['avatars', 'avatars/.']);
@@ -175,7 +177,8 @@ it('does not change metadata when storage returns false', function () {
     $attributes = $item->toArray();
     $file = $item->file;
     $disk = Mockery::mock(Filesystem::class);
-    $disk->shouldReceive('putFileAs')->once()->with('avatars', $file, 'avatar.png', [])->andReturn(false);
+    $disk->shouldReceive('putFileAs')->once()
+        ->with('avatars', $file, 'avatar.png', [])->andReturn(false);
     Storage::shouldReceive('disk')->with('broken')->andReturn($disk);
 
     expect($item->storeAs('avatars', 'avatar.png', 'broken'))->toBeFalse()
@@ -188,13 +191,17 @@ it('retains the local source after storing to a remote disk', function () {
     $source = UploadedFile::fake()->image('avatar.png');
     $item = new PinUploadedFile($source, [], []);
     $disk = Mockery::mock(FilesystemAdapter::class);
-    $disk->shouldReceive('putFileAs')->once()->with('avatars', $source, 'avatar.png', ['visibility' => 'public'])
+    $disk->shouldReceive('putFileAs')->once()
+        ->with('avatars', $source, 'avatar.png', ['visibility' => 'public'])
         ->andReturn('avatars/avatar.png');
-    $disk->shouldReceive('getAdapter')->andReturn(Mockery::mock(League\Flysystem\FilesystemAdapter::class));
-    $disk->shouldReceive('url')->with('avatars/avatar.png')->andReturn('https://files.example/avatars/avatar.png');
+    $disk->shouldReceive('getAdapter')
+        ->andReturn(Mockery::mock(League\Flysystem\FilesystemAdapter::class));
+    $disk->shouldReceive('url')->with('avatars/avatar.png')
+        ->andReturn('https://files.example/avatars/avatar.png');
     Storage::shouldReceive('disk')->with('remote')->andReturn($disk);
 
-    expect($item->storeAs('avatars', 'avatar.png', ['disk' => 'remote', 'visibility' => 'public']))->toBe('avatars/avatar.png')
+    expect($item->storeAs('avatars', 'avatar.png', ['disk' => 'remote', 'visibility' => 'public']))
+        ->toBe('avatars/avatar.png')
         ->and($item->file)->toBe($source)
         ->and($item->pathname)->toBe($source->getPathname())
         ->and($item->disk)->toBe('remote')
@@ -229,10 +236,12 @@ it('uses distinct keys for different thumbnail dimensions', function () {
     expect($item->thumb)->toHaveKeys(['1x23', '12x3'])
         ->and($item->thumb['1x23']['pathname'])->not->toBe($item->thumb['12x3']['pathname']);
 
-    Storage::disk('local')->assertExists([$item->thumb['1x23']['path'], $item->thumb['12x3']['path']]);
+    Storage::disk('local')->assertExists([
+        $item->thumb['1x23']['path'], $item->thumb['12x3']['path'],
+    ]);
 });
 
-it('validates thumbnail dimensions before processing the image', function (int|string|null $width, ?int $height) {
+it('rejects invalid thumbnail dimensions', function (int|string|null $width, ?int $height) {
     $item = new PinUploadedFile(UploadedFile::fake()->image('avatar.png'), [], []);
 
     expect(fn () => $item->thumb(false, $width, $height))->toThrow(InvalidArgumentException::class);
@@ -269,4 +278,44 @@ it('removes the disk root only from the beginning of the path', function () {
     $pathname = $root.'nested'.$root.'avatar.png';
 
     expect($this->invoker($item)->path($pathname))->toBe('nested'.$root.'avatar.png');
+});
+
+it('keeps stored paths consistent with the filesystem', function (string $path) {
+    $item = new PinUploadedFile(UploadedFile::fake()->image('avatar.png'), [], []);
+
+    expect($item->storeAs($path, 'avatar.png'))->toBe('avatars/nested/avatar.png')
+        ->and($item->path)->toBe('avatars/nested/avatar.png')
+        ->and($item->file->getContent())->not->toBeEmpty()
+        ->and($item->pathname)->toBe(Storage::disk('local')->path($item->path))
+        ->and($item->url())->toBe(Storage::disk('local')->url($item->path));
+})->with([
+    'avatars/nested',
+    'avatars\\nested',
+    'avatars//nested',
+    'avatars/./nested',
+    'avatars/missing/../nested',
+]);
+
+it('normalizes the directory when moving files', function (string $path) {
+    $item = new PinUploadedFile(UploadedFile::fake()->image('avatar.png'), [], []);
+    $item->storeAs('original', 'avatar.png');
+    $file = $item->move($path, 'avatar.png');
+
+    expect($item->path)->toBe('avatars/nested/avatar.png')
+        ->and($file->getPathname())->toBe(Storage::disk('local')->path($item->path));
+
+    Storage::disk('local')->assertMissing('original/avatar.png');
+    Storage::disk('local')->assertExists('avatars/nested/avatar.png');
+})->with(['avatars\\nested', 'avatars/./nested', 'avatars/missing/../nested']);
+
+it('rejects moving outside the disk before changing the file', function () {
+    $item = new PinUploadedFile(UploadedFile::fake()->image('avatar.png'), [], []);
+    $item->storeAs('original', 'avatar.png');
+    $attributes = $item->toArray();
+
+    expect(fn () => $item->move('missing/../../escape', 'avatar.png'))
+        ->toThrow(PathTraversalDetected::class);
+
+    expect($item->toArray())->toBe($attributes);
+    Storage::disk('local')->assertExists('original/avatar.png');
 });

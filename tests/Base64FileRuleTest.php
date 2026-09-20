@@ -8,10 +8,13 @@ use Pin\Upload\Rules\Base64File;
 
 it('validates the decoded content and registers accepted files', function () {
     $content = trim(file_get_contents(__DIR__.'/resources/base64'));
-    $validator = Validator::make(['avatar' => $content], ['avatar' => new Base64File(['image/png'])]);
+    $validator = Validator::make(
+        ['avatar' => $content], ['avatar' => new Base64File(['image/png'])]
+    );
 
     expect($validator->passes())->toBeTrue()
-        ->and(app()->request->attributes->get('base64file.avatar'))->toBeInstanceOf(DecodedFile::class);
+        ->and(app()->request->attributes->get('base64file.avatar'))
+        ->toBeInstanceOf(DecodedFile::class);
 });
 
 it('rejects invalid values through the validation callback', function (mixed $value) {
@@ -31,9 +34,13 @@ it('uses the actual MIME type and removes a previous result on failure', functio
     $pathname = app()->request->attributes->get('base64file.avatar')->getPathname();
     $errors = [];
 
-    $rule->validate('avatar', 'data:image/png;base64,'.base64_encode('hello world'), function (string $message) use (&$errors) {
-        $errors[] = $message;
-    });
+    $rule->validate(
+        'avatar',
+        'data:image/png;base64,'.base64_encode('hello world'),
+        function (string $message) use (&$errors) {
+            $errors[] = $message;
+        }
+    );
 
     expect($errors)->toHaveCount(1)
         ->and(app()->request->attributes->has('base64file.avatar'))->toBeFalse()
