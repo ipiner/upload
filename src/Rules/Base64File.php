@@ -11,7 +11,7 @@ use Override;
 use Pin\Upload\Base64File as DecodedFile;
 
 /**
- * Base64 文件验证规则。
+ * Base64 文件验证规则
  */
 class Base64File implements ValidationRule
 {
@@ -23,7 +23,7 @@ class Base64File implements ValidationRule
     }
 
     /**
-     * 验证 Base64 文件。
+     * 验证 Base64 文件
      */
     #[Override]
     public function validate(string $attribute, mixed $value, Closure $fail): void

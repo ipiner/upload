@@ -14,7 +14,7 @@ use Pin\Support\ServiceProvider;
 class UploadServiceProvider extends ServiceProvider
 {
     /**
-     * 注册上传配置。
+     * 注册上传配置
      */
     #[Override]
     public function register(): void
@@ -23,7 +23,7 @@ class UploadServiceProvider extends ServiceProvider
     }
 
     /**
-     * 注册上传错误。
+     * 注册上传错误
      */
     public function boot(): void
     {

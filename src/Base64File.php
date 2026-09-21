@@ -9,7 +9,7 @@ use Symfony\Component\HttpFoundation\File\Exception\FileException;
 use Symfony\Component\HttpFoundation\File\File;
 
 /**
- * Base64 上传文件。
+ * Base64 上传文件
  */
 class Base64File extends File
 {
@@ -30,7 +30,7 @@ class Base64File extends File
     }
 
     /**
-     * 解码 Base64 Data URI。
+     * 解码 Base64 Data URI
      *
      * @throws InvalidArgumentException
      */

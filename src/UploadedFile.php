@@ -22,7 +22,7 @@ use Symfony\Component\HttpFoundation\File\File;
 use Symfony\Component\Mime\MimeTypes;
 
 /**
- * 上传文件。
+ * 上传文件
  *
  * @property string $pathname 本地源文件绝对路径
  * @property string $path 相对路径（基于 disk）
@@ -42,7 +42,7 @@ use Symfony\Component\Mime\MimeTypes;
 class UploadedFile extends Fluent
 {
     /**
-     * 本地文件。
+     * 本地文件
      */
     public File $file;
 
@@ -82,7 +82,7 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 获取上传验证结果。
+     * 获取上传验证结果
      */
     public static function item(HttpUploadedFile|string $hash): ?static
     {
@@ -92,7 +92,7 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 获取当前请求的上传验证结果。
+     * 获取当前请求的上传验证结果
      *
      * @return array<string, static>
      */
@@ -102,7 +102,7 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 记录上传验证结果。
+     * 记录上传验证结果
      *
      * @param  array<int, string>  $errors
      */
@@ -158,7 +158,7 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 移动本地文件。
+     * 移动本地文件
      *
      * @param  string  $path  相对路径
      * @param  string|null  $name  文件名
@@ -181,7 +181,7 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 存储文件。
+     * 存储文件
      */
     public function storeAs(
         string $path,
@@ -303,7 +303,7 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 生成文件名。
+     * 生成文件名
      */
     protected function hashName(): string
     {
@@ -311,7 +311,7 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 获取图片处理器。
+     * 获取图片处理器
      */
     protected function imageManager(): ImageManager
     {
@@ -319,7 +319,7 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 是否为本地磁盘。
+     * 是否为本地磁盘
      */
     protected function isLocalDisk(Filesystem $disk): bool
     {
@@ -328,7 +328,7 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 保留原图信息。
+     * 保留原图信息
      */
     protected function rememberOriginal(): void
     {
@@ -394,7 +394,7 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 写入文件。
+     * 写入文件
      */
     protected function storeFile(
         Filesystem $disk,
@@ -414,7 +414,7 @@ class UploadedFile extends Fluent
                 ? false : $targetPath;
         }
 
-        // 同一文件仅更新权限。
+        // 同一文件仅更新权限
         if (isset($options['visibility'])
             && ! $disk->setVisibility($targetPath, $options['visibility'])) {
             return false;
@@ -424,7 +424,7 @@ class UploadedFile extends Fluent
     }
 
     /**
-     * 解析缩略图尺寸。
+     * 解析缩略图尺寸
      *
      * @return array{string, int|null, int|null}
      */

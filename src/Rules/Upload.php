@@ -17,7 +17,7 @@ use Pin\Upload\UploadedFile as ValidatedFile;
 use Symfony\Component\Mime\MimeTypes;
 
 /**
- * 文件上传验证规则。
+ * 文件上传验证规则
  */
 class Upload implements ValidationRule
 {
@@ -125,7 +125,7 @@ class Upload implements ValidationRule
     }
 
     /**
-     * 验证上传文件。
+     * 验证上传文件
      */
     #[Override]
     public function validate(string $attribute, mixed $value, Closure $fail): void
@@ -150,7 +150,7 @@ class Upload implements ValidationRule
     }
 
     /**
-     * 报告验证错误。
+     * 报告验证错误
      */
     protected function fail(Closure $fail): void
     {
@@ -160,7 +160,7 @@ class Upload implements ValidationRule
     }
 
     /**
-     * 获取文件 MIME 类型。
+     * 获取文件 MIME 类型
      */
     protected function fileMimeType(): ?string
     {
@@ -168,7 +168,7 @@ class Upload implements ValidationRule
     }
 
     /**
-     * 换算文件大小。
+     * 换算文件大小
      */
     protected function sizeInBytes(int|string $size): int
     {
@@ -214,7 +214,7 @@ class Upload implements ValidationRule
     }
 
     /**
-     * 忽略大小写匹配。
+     * 忽略大小写匹配
      */
     protected function inArray(?string $needle, array $haystack): bool
     {
