@@ -4,7 +4,7 @@
   "keywords": ["framework", "laravel", "pin", "upload"],
   "license": "MIT",
   "require": {
-    "ipiner/pin": "^1.0",
+    "ipiner/pin": "dev-main",
     "intervention/image": "^3.11"
   },
   "require-dev": {
